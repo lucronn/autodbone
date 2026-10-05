@@ -17,6 +17,24 @@ describe("Upstream HTML normalizer", () => {
     expect(result.html).toContain('height="514"');
   });
 
+  it("preserves relative AutoDBone figure URLs as normalized connector resources", () => {
+    const result = normalizeHtml(
+      '<img class="img-thumbnail" src="api/source/MOTOR/graphic/16619615">',
+      { ...context, contentSource: "Motor", publicCatalog: "catalog" },
+    );
+
+    expect(result.html).toContain(
+      'src="https://connector.test/v1/assets/reference/source/Motor/16619615"',
+    );
+    expect(result.resources).toEqual([
+      expect.objectContaining({
+        url: "https://connector.test/v1/assets/reference/source/Motor/16619615",
+        kind: "asset",
+        attribute: "src",
+      }),
+    ]);
+  });
+
   it("maps embedded link and emphasis tags without executing content", () => {
     const result = normalizeHtml('<p><eplink linkfield="AN" linkkey="4481222">Open</eplink> <emph>bold-ish</emph></p>', context);
     expect(result.html).toContain('<a href="https://connector.test/v1/api/catalog/gm/vehicle/100342221/article/4481222">Open</a>');
