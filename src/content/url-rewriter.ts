@@ -25,6 +25,16 @@ export type RewrittenResources = {
   resources: RewrittenResource[];
 };
 
+const CANONICAL_CONTENT_SOURCES: Record<string, string> = {
+  generalmotors: "GeneralMotors",
+  motor: "Motor",
+  toyota: "Toyota",
+};
+
+function canonicalContentSource(value: string): string | undefined {
+  return CANONICAL_CONTENT_SOURCES[value.toLowerCase()];
+}
+
 function targetForUrl(value: string, context: ResourceRewriteContext): AssetTarget | undefined {
   let url: URL;
   try {
@@ -34,10 +44,19 @@ function targetForUrl(value: string, context: ResourceRewriteContext): AssetTarg
   }
   if (url.origin !== new URL(context.upstreamOrigin).origin) return undefined;
   const parts = url.pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
-  if (parts[0] !== "m1" || parts[1] !== "api") return undefined;
-  if (parts[2] === "asset" && parts[3]) return { kind: "asset", id: parts[3] };
-  if (parts[2] === "source" && parts[3] && parts[4] === "graphic" && parts[5]) {
-    return { kind: "graphic", source: parts[3], id: parts[5] };
+  const apiIndex = parts[0] === "m1" && parts[1] === "api"
+    ? 2
+    : parts[0] === "api"
+      ? 1
+      : -1;
+  if (apiIndex < 0) return undefined;
+  if (parts[apiIndex] === "asset" && parts[apiIndex + 1]) {
+    return { kind: "asset", id: parts[apiIndex + 1] };
+  }
+  if (parts[apiIndex] === "source" && parts[apiIndex + 2] === "graphic" && parts[apiIndex + 3]) {
+    const source = canonicalContentSource(parts[apiIndex + 1] ?? "");
+    if (!source) return undefined;
+    return { kind: "graphic", source, id: parts[apiIndex + 3] };
   }
   return undefined;
 }

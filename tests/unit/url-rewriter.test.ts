@@ -21,6 +21,25 @@ describe("resource URL rewriting", () => {
     ]));
   });
 
+  it("rewrites provider-relative graphic paths and canonicalizes source casing", () => {
+    const result = rewriteResources(
+      '<img src="api/source/MOTOR/graphic/16619615"><img src="/api/source/Toyota/graphic/diagram%3A2">',
+      context,
+    );
+
+    expect(result.html).toContain('src="https://connector.test/v1/assets/reference/graphic/Motor/16619615"');
+    expect(result.html).toContain('src="https://connector.test/v1/assets/reference/graphic/Toyota/diagram:2"');
+    expect(result.resources).toHaveLength(2);
+    expect(result.html).not.toContain("sites.motor.com");
+  });
+
+  it("does not turn an unknown provider source into an asset reference", () => {
+    const result = rewriteResources('<img src="api/source/Unknown/graphic/42">', context);
+
+    expect(result.html).not.toContain("src=");
+    expect(result.resources).toEqual([]);
+  });
+
   it("rewrites srcset and removes unsafe CSS URLs", () => {
     const result = rewriteResources(
       '<img srcset="/m1/api/asset/a 1x, /m1/api/asset/b 2x" style="background:url(javascript:alert(1))">',
