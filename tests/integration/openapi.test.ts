@@ -16,6 +16,8 @@ describe("OpenAPI", () => {
     const document = response.json();
     expect(response.statusCode).toBe(200);
     expect(Object.keys(document.paths)).toContain("/v1/api/year/{year}/makes");
+    expect(document.components.securitySchemes.BankoneBearer.scheme).toBe("bearer");
+    expect(document.paths["/v1/api/years"].get.security).toEqual([{ BankoneBearer: [] }]);
     expect(JSON.stringify(document.paths)).not.toMatch(/POST|PUT|PATCH|DELETE/);
     expect(JSON.stringify(document.paths)).not.toMatch(/motor/i);
     await app.close();

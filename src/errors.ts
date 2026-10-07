@@ -14,6 +14,8 @@ export type ConnectorErrorCode =
   | "invalid_asset_reference"
   | "expired_asset_reference"
   | "browser_fallback_unconfigured"
+  | "unauthenticated"
+  | "key_store_unavailable"
   | "internal_error";
 
 export class ConnectorError extends Error {
