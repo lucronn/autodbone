@@ -50,6 +50,12 @@ function openApiParameter(name: string, location: "path" | "query", required: bo
 export async function registerOpenApi(app: FastifyInstance): Promise<void> {
   const openapi = app.swagger?.();
   if (!openapi) return;
+  const document = openapi as unknown as OpenAPIV3.Document;
+  document.components ??= {};
+  document.components.securitySchemes = {
+    ...(document.components.securitySchemes ?? {}),
+    BankoneBearer: { type: "http", scheme: "bearer", bearerFormat: "AutoData API key", description: "Create a Bankone key in the protected AutoData key dashboard." },
+  };
   openapi.paths ??= {};
   for (const route of PUBLIC_API_ROUTES) {
     const path = route.url.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
@@ -63,9 +69,12 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
     openapi.paths[path].get = {
       operationId: route.routeId,
       summary: `Read upstream ${route.routeId}`,
+      security: [{ BankoneBearer: [] }],
       parameters,
       responses: {
         "200": { description: "Upstream response envelope" },
+        "401": { description: "Missing, invalid, expired, revoked, or wrong-service API key" },
+        "503": { description: "Shared key store unavailable; request was rejected" },
         ...(route.routeId === "parts" ? { "404": { description: "No parts list is available for this vehicle" } } : {}),
         ...(route.routeId === "labor" ? { "404": { description: "No labor data is available for this vehicle or article" } } : {}),
         ...(["maintenanceFrequency", "maintenanceIntervals", "maintenanceIndicators"].includes(route.routeId)

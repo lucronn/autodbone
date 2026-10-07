@@ -8,19 +8,21 @@ import { EncryptedSessionStore } from "./auth/session-store.js";
 import { SessionManager } from "./auth/session-manager.js";
 import { UpstreamApiClient } from "./upstream/upstream-client.js";
 import { AssetProxy } from "./assets/asset-proxy.js";
-import { serializeError } from "./errors.js";
+import { ConnectorError, serializeError } from "./errors.js";
 import { registerApiRoutes } from "./routes/api-routes.js";
 import { registerAssetRoutes } from "./routes/asset-routes.js";
 import { registerHealthRoutes } from "./routes/health-routes.js";
 import { registerOpenApi } from "./openapi.js";
 import { ClientRateLimiter } from "./http/client-rate-limiter.js";
 import { ResponseCache } from "./http/response-cache.js";
+import { bearerToken, createApiKeyVerifier, type ApiKeyVerifier } from "./api-keys.js";
 
 export type ConnectorDependencies = {
   config: Config;
   upstreamClient?: UpstreamApiClient;
   sessionManager?: SessionManager;
   assetProxy?: AssetProxy;
+  apiKeyVerifier?: ApiKeyVerifier;
 };
 
 export async function createApp(deps: ConnectorDependencies): Promise<FastifyInstance> {
@@ -40,6 +42,8 @@ export async function createApp(deps: ConnectorDependencies): Promise<FastifyIns
     maxEntries: deps.config.limits.responseCacheMaxEntries,
     maxBytes: deps.config.limits.responseCacheMaxBytes,
   });
+  const testBypass = process.env.NODE_ENV === "test" && !deps.apiKeyVerifier && !deps.config.apiKeysDatabaseUrl;
+  const verifyApiKey = deps.apiKeyVerifier ?? createApiKeyVerifier(deps.config.apiKeysDatabaseUrl, testBypass);
 
   app.setErrorHandler((error, request, reply) => {
     const serialized = serializeError(error, request.id);
@@ -48,11 +52,18 @@ export async function createApp(deps: ConnectorDependencies): Promise<FastifyIns
   await app.register(swagger, {
       openapi: {
       openapi: "3.0.3",
-      info: { title: "Autodbone Read-only Connector API", version: "0.1.0" },
+      info: { title: "Bankone Read-only API", version: "0.1.0" },
     },
   });
   await app.register(swaggerUi, { routePrefix: "/docs" });
   app.get("/openapi.json", async () => app.swagger());
+  app.addHook("preHandler", async (request) => {
+    if (!request.url.split("?", 1)[0].startsWith("/v1/")) return;
+    const token = bearerToken(request.headers.authorization);
+    if ((!token && !testBypass) || (token && !(await verifyApiKey(token, "bankone")))) {
+      throw new ConnectorError("unauthenticated", "A valid Bankone API key is required", 401);
+    }
+  });
   registerApiRoutes(app, { config: deps.config, upstreamClient, sessionManager, clientRateLimiter, responseCache });
   registerAssetRoutes(app, { config: deps.config, assetProxy, sessionManager });
   registerHealthRoutes(app);

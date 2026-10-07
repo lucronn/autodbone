@@ -1,8 +1,8 @@
-# Autodbone Read-only Connector API
+# Bankone Read-only API
 
 This service is a small, direct connector to the same `/m1/api/*` service used by the provider frontend. It does not execute the frontend bundle, render the application, scrape browser content, or expose a general-purpose proxy. It authenticates the upstream service over HTTP, then forwards an explicit allowlist of read-only provider resources.
 
-The connector API itself is unauthenticated by design. Deploy it only behind an authenticated, trusted network boundary such as a private service network, gateway, VPN, or service-to-service policy. Clients of the connector never receive the EBSCO prompt value, authorization code, provider cookies, or encrypted session key.
+All `/v1/*` connector routes require a Bankone API key in `Authorization: Bearer <key>`. Keys are validated against the shared AutoData key database on each request. `/healthz`, `/readyz`, and API documentation remain public and do not return protected source data. Configure `API_KEYS_DATABASE_URL` as a server-side deployment secret. Clients of the connector never receive the EBSCO prompt value, authorization code, provider cookies, or encrypted session key.
 
 ## Quick start
 
