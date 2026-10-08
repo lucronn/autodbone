@@ -4,7 +4,7 @@ const PROVIDER_TOKEN = /\bMOTOR\b/gi;
 const URL_KEYS = new Set(["url", "href", "src", "srcset", "style"]);
 
 export function maskProviderBranding(value: string): string {
-  return value.replace(PROVIDER_TOKEN, "Autodbone");
+  return value.replace(PROVIDER_TOKEN, "Bankone");
 }
 
 export function maskHtmlProviderBranding(html: string): string {

@@ -10,13 +10,14 @@ const config = loadConfig({
 });
 
 describe("OpenAPI", () => {
-  it("documents public routes without write methods", async () => {
+  it("documents public routes and bounded source contract operations", async () => {
     const app = await createApp({ config });
     const response = await app.inject({ method: "GET", url: "/openapi.json" });
     const document = response.json();
     expect(response.statusCode).toBe(200);
     expect(Object.keys(document.paths)).toContain("/v1/api/year/{year}/makes");
-    expect(JSON.stringify(document.paths)).not.toMatch(/POST|PUT|PATCH|DELETE/);
+    expect(document.paths["/v1/vehicle-resolutions"]?.post).toBeDefined();
+    expect(document.paths["/v1/vehicles/{opaqueRef}/article-search"]?.post).toBeDefined();
     expect(JSON.stringify(document.paths)).not.toMatch(/motor/i);
     await app.close();
   });

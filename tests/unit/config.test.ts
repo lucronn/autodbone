@@ -8,11 +8,9 @@ const validEnv = {
 };
 
 describe("loadConfig", () => {
-  it("uses the configured institutional fallback entry and ZIP when overrides are omitted", () => {
-    const config = loadConfig({ SESSION_ENCRYPTION_KEY: "a".repeat(64) });
-
-    expect(config.upstream.entryUrl).toBe("https://search.ebscohost.com/login.aspx?authtype=ip,geo,cpid,uid&groupid=main&custid=ns145344&profile=autorepso");
-    expect(config.upstream.promptValue).toBe("20234");
+  it("requires runtime-managed upstream credentials", () => {
+    expect(() => loadConfig({ SESSION_ENCRYPTION_KEY: "a".repeat(64) })).toThrow(/UPSTREAM_ENTRY_URL/);
+    expect(() => loadConfig({ ...validEnv, UPSTREAM_PROMPT_VALUE: "" })).toThrow(/UPSTREAM_PROMPT_VALUE/);
   });
 
   it("loads a server session configuration without exposing secret values", () => {

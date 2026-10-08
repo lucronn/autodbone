@@ -76,4 +76,21 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
       },
     };
   }
+  const sourcePaths = [
+    ["/v1/capabilities", "get", "capabilities"],
+    ["/v1/catalog/{scope}", "get", "readCatalog"],
+    ["/v1/vehicle-resolutions", "post", "resolveVehicle"],
+    ["/v1/vehicles/{opaqueRef}/articles", "get", "listArticles"],
+    ["/v1/vehicles/{opaqueRef}/article-search", "post", "searchArticles"],
+    ["/v1/resources/{opaqueRef}", "get", "readResource"],
+  ] as const;
+  for (const [path, method, operationId] of sourcePaths) {
+    openapi.paths[path] ??= {};
+    (openapi.paths[path] as Record<string, unknown>)[method] = {
+      operationId,
+      summary: `Source contract ${operationId}`,
+      parameters: [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } })),
+      responses: { "200": { description: "Versioned source contract response" }, "400": { description: "Invalid input" }, "502": { description: "Upstream failure" } },
+    };
+  }
 }
