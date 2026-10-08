@@ -1,8 +1,8 @@
-# Autodbone Read-only Connector API
+# Bankone Source API
 
 This service is a small, direct connector to the same `/m1/api/*` service used by the provider frontend. It does not execute the frontend bundle, render the application, scrape browser content, or expose a general-purpose proxy. It authenticates the upstream service over HTTP, then forwards an explicit allowlist of read-only provider resources.
 
-The connector API itself is unauthenticated by design. Deploy it only behind an authenticated, trusted network boundary such as a private service network, gateway, VPN, or service-to-service policy. Clients of the connector never receive the EBSCO prompt value, authorization code, provider cookies, or encrypted session key.
+The connector API itself is unauthenticated by design. Deploy it only behind an authenticated, trusted network boundary such as a private service network, gateway, VPN, or service-to-service policy. Clients of the connector never receive upstream credentials, provider cookies, or the encrypted session key.
 
 ## Quick start
 
@@ -16,19 +16,20 @@ npm run build
 npm start
 ```
 
-The connector includes the supplied institutional entry URL and prompted ZIP as fallback defaults. Set them explicitly in deployment configuration when possible, and override them if your institution or profile differs. The session encryption key remains required:
+Supply all upstream authentication values through runtime secrets. The required values are:
 
-- `UPSTREAM_ENTRY_URL`: the EBSCO entry URL for the institution/profile; defaults to the supplied `ns145344`/`autorepso` profile.
-- `UPSTREAM_PROMPT_VALUE`: the authorized prompted-login value; defaults to the supplied ZIP `20234`.
+- `UPSTREAM_ENTRY_URL`: the authorized entry URL for the institution/profile.
+- `UPSTREAM_PROMPT_VALUE`: the authorized prompted-login value.
 - `SESSION_ENCRYPTION_KEY`: a 32-byte key encoded as 64 hexadecimal characters.
+- `SOURCE_REF_ACTIVE_KEY_ID` and `SOURCE_REF_KEYS_JSON`: a separately managed, versioned 32-byte reference keyring. Keep older keys in the JSON map while stored opaque references still use them; rotate by adding a new key ID and making it active. Session-key rotation does not change source references.
 
-The prompt value is an access credential. Anyone with access to this public repository can see the fallback value, so rotate or override it before using this repository outside the supplied environment. The connector does not bypass provider entitlement controls; the operator must supply authorized access.
+The prompt value is an access credential. The connector does not bypass provider entitlement controls; the operator must supply authorized access.
 
 For development, `npm run dev` starts the TypeScript watcher. The default bind is `127.0.0.1:3000`; change `HOST`, `PORT`, and `PUBLIC_BASE_URL` as needed. `PUBLIC_BASE_URL` is used when normalized HTML is given to a frontend, so it should be the externally reachable connector origin.
 
 ### Vercel
 
-The existing `src/server.ts` Fastify entrypoint also exports the Vercel Node.js handler. Configure `SESSION_ENCRYPTION_KEY` and set `SESSION_FILE_PATH=/tmp/autodbone-session.enc`; Vercel function filesystems are ephemeral, so durable server-session persistence requires an external encrypted store before relying on reauthentication across cold starts. Do not expose the service publicly without a trusted gateway or equivalent access control.
+The `src/server.ts` Fastify entrypoint also exports the Vercel Node.js handler. Configure `UPSTREAM_ENTRY_URL`, `UPSTREAM_PROMPT_VALUE`, `SESSION_ENCRYPTION_KEY`, `SOURCE_REF_ACTIVE_KEY_ID`, `SOURCE_REF_KEYS_JSON`, `SESSION_FILE_PATH=/tmp/bankone-session.enc`, and `PUBLIC_BASE_URL=https://bankone.cars.tk` in Bankone's own Vercel project. Attach `bankone.cars.tk` directly to that project after the nonproduction contract check. Vercel function filesystems are ephemeral, so durable server-session persistence requires an external encrypted store before relying on reauthentication across cold starts. Apply the service access policy at Bankone's ingress. This repository has no AutoData database or object-store dependency.
 
 ## Authentication and persistence
 
@@ -55,7 +56,9 @@ Caller requests are admitted through a per-client sliding-window limit before an
 
 ## Public API
 
-Every public connector route is `GET`. Upstream response envelopes are retained as `{ header, body }`. Upstream non-2xx responses become a sanitized connector error with a request ID and upstream status; upstream headers, cookies, and bodies are not included in errors.
+The legacy `/v1/api/*` connector routes are `GET`. Upstream response envelopes are retained as `{ header, body }`. Upstream non-2xx responses become a sanitized connector error with a request ID and upstream status; upstream headers, cookies, and bodies are not included in errors.
+
+The provider-neutral source contract lives at `/v1`. Bankone implements `GET /v1/capabilities`, `GET /v1/catalog/{scope}`, `POST /v1/vehicle-resolutions`, `GET /v1/vehicles/{opaqueRef}/articles`, `POST /v1/vehicles/{opaqueRef}/article-search`, and `GET /v1/resources/{opaqueRef}`. `scope` is `years`, `makes`, `models`, or `configurations`. List responses carry `complete` and a bound `next_cursor` when another page exists. Ambiguous vehicle matches remain separate candidates. Vehicle, article, resource, and cursor references are stable authenticated encrypted values; callers cannot choose upstream targets through them. Article and labor responses include SHA-256 over original source content, and binary resources include SHA-256 over decoded bytes. Article resources expose `asset_resource_refs` while retaining the source HTML unchanged. Binary reads return JSON by default or raw bytes with `Content-Type: application/octet-stream` when that type is requested; `X-Source-Media-Type` reports the upstream type. All resource responses emit provenance headers. Catalog cursors bind to the source revision, so callers restart pagination if the upstream list changes. The contract's source envelope carries a request ID, `bankone` provider, source revision, retrieval time, and bank-owned source locator.
 
 Catalog and vehicle routes:
 
@@ -102,10 +105,10 @@ For JSON routes, the default response preserves upstream metadata and normalizes
 GET /v1/api/catalog/gm/vehicle/100342221/article/4481222%3A17911387?bucketName=Component%20Location%20Diagrams&articleSubtype=&searchTerm=&raw=true
 ```
 
-The normalized form keeps the original `header` and document metadata, replaces `body.html`, and adds a `connector` namespace containing `normalized`, `links`, and `resources`. Standalone provider branding in textual fields is replaced with `Autodbone`; URLs, asset references, compound catalog names, and opaque identifiers are preserved. Custom provider tags are converted as follows:
+The normalized form keeps the original `header` and document metadata, replaces `body.html`, and adds a `connector` namespace containing `normalized`, `links`, and `resources`. Standalone provider branding in textual fields is replaced with `Bankone`; URLs, asset references, compound catalog names, and opaque identifiers are preserved. Custom provider tags are converted as follows:
 
 - `<mtr-image id="..." ...>` becomes an ordinary `<img>` whose `src` points to a signed connector asset URL.
-- `<eplink linkkey="...">` becomes an Autodbone catalog article `<a>` link.
+- `<eplink linkkey="...">` becomes a Bankone catalog article `<a>` link.
 - `<emph>` becomes `<em>`.
 - Other unknown custom elements become safe `<span>`/`<div>` elements while their unsafe/provider-specific attributes are removed.
 
@@ -133,7 +136,7 @@ Example with the supplied article shape:
 - Process health: `GET /healthz`
 - Readiness shape: `GET /readyz`
 
-The OpenAPI document describes the public GET-only surface. No connector authentication scheme is advertised because deployment authentication belongs at the trusted-network boundary. Health responses do not reveal upstream cookies or token state.
+The OpenAPI document describes the public legacy and source-contract routes. No connector authentication scheme is advertised because deployment authentication belongs at the trusted-network boundary. Health responses do not reveal upstream cookies or token state.
 
 ## Configuration reference
 
@@ -146,7 +149,8 @@ The OpenAPI document describes the public GET-only surface. No connector authent
 | `UPSTREAM_API_ORIGIN`, `UPSTREAM_LOGIN_ORIGIN` | HTTPS upstream origins |
 | `UPSTREAM_ALLOWED_CONTENT_SOURCES` | Comma-separated source allowlist |
 | `SESSION_FILE_PATH` | Encrypted server-session location |
-| `SESSION_ENCRYPTION_KEY` | 32-byte hex encryption/signing key |
+| `SESSION_ENCRYPTION_KEY` | 32-byte hex session encryption key |
+| `SOURCE_REF_ACTIVE_KEY_ID`, `SOURCE_REF_KEYS_JSON` | Versioned source-reference keyring, managed separately from session encryption |
 | `SESSION_REFRESH_SKEW_SECONDS` | Explicit expiry safety window |
 | `REQUEST_TIMEOUT_MS` | Per-upstream-request timeout |
 | `MAX_RESPONSE_BYTES`, `MAX_ASSET_BYTES` | Bounded upstream response sizes |

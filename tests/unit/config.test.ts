@@ -5,14 +5,14 @@ const validEnv = {
   UPSTREAM_ENTRY_URL: "https://search.ebscohost.com/login.aspx?profile=example",
   UPSTREAM_PROMPT_VALUE: "example-prompt",
   SESSION_ENCRYPTION_KEY: "a".repeat(64),
+  SOURCE_REF_ACTIVE_KEY_ID: "v1",
+  SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
 };
 
 describe("loadConfig", () => {
-  it("uses the configured institutional fallback entry and ZIP when overrides are omitted", () => {
-    const config = loadConfig({ SESSION_ENCRYPTION_KEY: "a".repeat(64) });
-
-    expect(config.upstream.entryUrl).toBe("https://search.ebscohost.com/login.aspx?authtype=ip,geo,cpid,uid&groupid=main&custid=ns145344&profile=autorepso");
-    expect(config.upstream.promptValue).toBe("20234");
+  it("requires runtime-managed upstream credentials", () => {
+    expect(() => loadConfig({ SESSION_ENCRYPTION_KEY: "a".repeat(64) })).toThrow(/UPSTREAM_ENTRY_URL/);
+    expect(() => loadConfig({ ...validEnv, UPSTREAM_PROMPT_VALUE: "" })).toThrow(/UPSTREAM_PROMPT_VALUE/);
   });
 
   it("loads a server session configuration without exposing secret values", () => {
@@ -22,6 +22,13 @@ describe("loadConfig", () => {
     expect(config.session.encryptionKey).toHaveLength(32);
     expect(config.session.encryptionKey.toString("hex")).toBe("a".repeat(64));
     expect(config.upstream.promptValue).toBe("example-prompt");
+    expect(config.sourceRefs.activeKeyId).toBe("v1");
+    expect(config.sourceRefs.keys.v1).toHaveLength(32);
+  });
+
+  it("keeps source-reference keys independent of the session key", () => {
+    expect(() => loadConfig({ ...validEnv, SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "a".repeat(64) }) })).toThrow(/separate/);
+    expect(() => loadConfig({ ...validEnv, SOURCE_REF_ACTIVE_KEY_ID: "v2" })).toThrow(/must exist/);
   });
 
   it("rejects a non-HTTPS upstream origin", () => {

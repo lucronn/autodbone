@@ -11,6 +11,8 @@ const config = loadConfig({
   UPSTREAM_ENTRY_URL: "https://search.ebscohost.com/login.aspx?profile=example",
   UPSTREAM_PROMPT_VALUE: "synthetic-prompt",
   SESSION_ENCRYPTION_KEY: "a".repeat(64),
+  SOURCE_REF_ACTIVE_KEY_ID: "v1",
+  SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
 });
 const secret = Buffer.from("asset-proxy-test-secret");
 const session: AuthenticatedSession = {

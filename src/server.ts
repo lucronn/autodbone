@@ -15,6 +15,7 @@ import { registerHealthRoutes } from "./routes/health-routes.js";
 import { registerOpenApi } from "./openapi.js";
 import { ClientRateLimiter } from "./http/client-rate-limiter.js";
 import { ResponseCache } from "./http/response-cache.js";
+import { registerSourceContractRoutes } from "./source-contract/routes.js";
 
 export type ConnectorDependencies = {
   config: Config;
@@ -24,7 +25,7 @@ export type ConnectorDependencies = {
 };
 
 export async function createApp(deps: ConnectorDependencies): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, requestIdHeader: "x-request-id", routerOptions: { maxParamLength: 1024 } });
+  const app = Fastify({ logger: false, requestIdHeader: "x-request-id", routerOptions: { maxParamLength: 2048 } });
   const upstreamClient = deps.upstreamClient ?? new UpstreamApiClient(deps.config);
   const sessionManager = deps.sessionManager ?? new SessionManager(
     new EbscoHttpAuthAdapter(deps.config),
@@ -47,13 +48,14 @@ export async function createApp(deps: ConnectorDependencies): Promise<FastifyIns
   });
   await app.register(swagger, {
       openapi: {
-      openapi: "3.0.3",
-      info: { title: "Autodbone Read-only Connector API", version: "0.1.0" },
+      openapi: "3.1.0",
+      info: { title: "Bankone Source API", version: "1.0.0" },
     },
   });
   await app.register(swaggerUi, { routePrefix: "/docs" });
   app.get("/openapi.json", async () => app.swagger());
   registerApiRoutes(app, { config: deps.config, upstreamClient, sessionManager, clientRateLimiter, responseCache });
+  registerSourceContractRoutes(app, { config: deps.config, upstreamClient, sessionManager, clientRateLimiter, responseCache });
   registerAssetRoutes(app, { config: deps.config, assetProxy, sessionManager });
   registerHealthRoutes(app);
   await app.ready();

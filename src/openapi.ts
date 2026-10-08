@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { OpenAPIV3 } from "openapi-types";
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
 import { PUBLIC_API_ROUTES } from "./routes/api-routes.js";
 import { UPSTREAM_ROUTES } from "./upstream/route-registry.js";
 
@@ -48,7 +50,7 @@ function openApiParameter(name: string, location: "path" | "query", required: bo
 }
 
 export async function registerOpenApi(app: FastifyInstance): Promise<void> {
-  const openapi = app.swagger?.();
+  const openapi = app.swagger?.() as OpenAPIV3.Document | undefined;
   if (!openapi) return;
   openapi.paths ??= {};
   for (const route of PUBLIC_API_ROUTES) {
@@ -76,4 +78,10 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
       },
     };
   }
+  const contract = parse(readFileSync(new URL("./source-contract/openapi.yaml", import.meta.url), "utf8")) as OpenAPIV3.Document;
+  Object.assign(openapi.paths, contract.paths);
+  openapi.components = { ...openapi.components, ...contract.components };
+  openapi.servers = contract.servers;
+  openapi.openapi = contract.openapi;
+  openapi.info.version = contract.info.version;
 }

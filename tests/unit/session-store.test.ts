@@ -16,7 +16,7 @@ function session(): AuthenticatedSession {
 
 describe("EncryptedSessionStore", () => {
   it("persists encrypted session state without plaintext cookie values", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "autodbone-session-"));
+    const directory = await mkdtemp(join(tmpdir(), "bankone-session-"));
     const path = join(directory, "server-session.enc");
     const store = new EncryptedSessionStore(path, Buffer.alloc(32, 7));
 
@@ -29,7 +29,7 @@ describe("EncryptedSessionStore", () => {
   });
 
   it("rejects ciphertext written with a different key", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "autodbone-session-"));
+    const directory = await mkdtemp(join(tmpdir(), "bankone-session-"));
     const path = join(directory, "server-session.enc");
     await new EncryptedSessionStore(path, Buffer.alloc(32, 7)).save(session());
 

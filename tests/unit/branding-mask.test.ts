@@ -3,7 +3,7 @@ import { maskProviderBranding, maskProviderContent } from "../../src/content/bra
 
 describe("provider branding mask", () => {
   it("replaces standalone provider branding without changing compound source names", () => {
-    expect(maskProviderBranding("MOTOR Motor motor vehicle GeneralMotors")).toBe("Autodbone Autodbone Autodbone vehicle GeneralMotors");
+    expect(maskProviderBranding("MOTOR Motor motor vehicle GeneralMotors")).toBe("Bankone Bankone Bankone vehicle GeneralMotors");
   });
 
   it("masks textual body fields while preserving URL fields", () => {
@@ -14,8 +14,8 @@ describe("provider branding mask", () => {
     });
 
     expect(result).toEqual({
-      label: "Autodbone procedure",
-      html: '<p>Autodbone</p><img src="https://sites.motor.com/m1/api/x">',
+      label: "Bankone procedure",
+      html: '<p>Bankone</p><img src="https://sites.motor.com/m1/api/x">',
       url: "https://sites.motor.com/m1/api/x",
     });
   });

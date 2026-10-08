@@ -17,7 +17,7 @@ describe("Upstream HTML normalizer", () => {
     expect(result.html).toContain('height="514"');
   });
 
-  it("preserves relative AutoDBone figure URLs as normalized connector resources", () => {
+  it("preserves relative Bankone figure URLs as normalized connector resources", () => {
     const result = normalizeHtml(
       '<img class="img-thumbnail" src="api/source/MOTOR/graphic/16619615">',
       { ...context, contentSource: "Motor", publicCatalog: "catalog" },
