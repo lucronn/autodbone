@@ -82,5 +82,6 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
   Object.assign(openapi.paths, contract.paths);
   openapi.components = { ...openapi.components, ...contract.components };
   openapi.servers = contract.servers;
+  openapi.openapi = contract.openapi;
   openapi.info.version = contract.info.version;
 }

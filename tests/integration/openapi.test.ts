@@ -84,6 +84,8 @@ describe("OpenAPI", () => {
     const canonical = parse(await readFile(new URL("../../src/source-contract/openapi.yaml", import.meta.url), "utf8"));
     const app = await createApp({ config });
     const document = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+    expect(document.openapi).toBe("3.1.0");
+    expect(document.openapi).toBe(canonical.openapi);
     for (const [path, operations] of Object.entries(canonical.paths)) {
       expect(document.paths[path]).toEqual(operations);
     }

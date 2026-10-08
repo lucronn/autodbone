@@ -48,7 +48,7 @@ export async function createApp(deps: ConnectorDependencies): Promise<FastifyIns
   });
   await app.register(swagger, {
       openapi: {
-      openapi: "3.0.3",
+      openapi: "3.1.0",
       info: { title: "Bankone Source API", version: "1.0.0" },
     },
   });
