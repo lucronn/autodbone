@@ -11,6 +11,8 @@ const config = loadConfig({
   UPSTREAM_API_ORIGIN: "https://sites.motor.com",
   UPSTREAM_LOGIN_ORIGIN: "https://login.ebsco.com",
   SESSION_ENCRYPTION_KEY: "a".repeat(64),
+  SOURCE_REF_ACTIVE_KEY_ID: "v1",
+  SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
 });
 
 const response = (status: number, body: string, headers: Record<string, string | string[]> = {}): HttpResponse => ({

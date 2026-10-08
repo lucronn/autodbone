@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { ConnectorError } from "../errors.js";
 import type { UpstreamEnvelope } from "../upstream/upstream-client.js";
 import { encodeReference, type SourceReference } from "./references.js";
+import type { Config } from "../config.js";
 
 type RecordValue = Record<string, unknown>;
 const asRecord = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -53,7 +54,7 @@ export function requireEnvelope(value: unknown): UpstreamEnvelope<unknown> {
   if (!("header" in record) || !("body" in record)) throw new ConnectorError("upstream_error", "Invalid upstream response", 502);
   return record as UpstreamEnvelope<unknown>;
 }
-export function articleRows(envelope: UpstreamEnvelope<unknown>, catalog: string, vehicleId: string, key: Buffer) {
+export function articleRows(envelope: UpstreamEnvelope<unknown>, catalog: string, vehicleId: string, key: Config["sourceRefs"]) {
   return rows(envelope).map((item) => {
     const articleId = textField(item, "id", "articleId", "article_id");
     if (!articleId) return null;
@@ -61,13 +62,21 @@ export function articleRows(envelope: UpstreamEnvelope<unknown>, catalog: string
     const category = textField(item, "bucket", "bucketName", "articleType", "category");
     const component = textField(item, "component", "system", "componentName");
     const common: SourceReference = { catalog, vehicleId, articleId, kind: "article" };
+    const laborId = textField(item, "laborArticleId", "labor_article_id", "laborId") || (item.hasLabor === true ? articleId : "");
+    const graphicIds = Array.isArray(item.graphicIds) ? item.graphicIds : Array.isArray(item.imageIds) ? item.imageIds : [];
+    const assetIds = Array.isArray(item.assetIds) ? item.assetIds : [];
+    const assetResourceRefs = [
+      ...graphicIds.slice(0, 128).map((id) => encodeReference({ kind: "asset", catalog, assetKind: "graphic", assetId: String(id) }, key)),
+      ...assetIds.slice(0, 128).map((id) => encodeReference({ kind: "asset", catalog, assetKind: "asset", assetId: String(id) }, key)),
+    ].slice(0, 128);
     const article = {
       opaque_ref: encodeReference(common, key),
       title: title.slice(0, 1000),
       ...(category ? { category: category.slice(0, 256) } : {}),
       ...(component ? { component: component.slice(0, 256) } : {}),
       resource_ref: encodeReference(common, key),
-      labor_resource_ref: encodeReference({ ...common, kind: "labor" }, key),
+      ...(laborId ? { labor_resource_ref: encodeReference({ ...common, kind: "labor", articleId: laborId }, key) } : {}),
+      ...(assetResourceRefs.length ? { asset_resource_refs: assetResourceRefs } : {}),
     };
     return article;
   }).filter((item): item is NonNullable<typeof item> => item !== null);

@@ -13,6 +13,8 @@ const config = loadConfig({
   UPSTREAM_ENTRY_URL: "https://search.ebscohost.com/login.aspx?profile=example",
   UPSTREAM_PROMPT_VALUE: "synthetic-prompt",
   SESSION_ENCRYPTION_KEY: "a".repeat(64),
+  SOURCE_REF_ACTIVE_KEY_ID: "v1",
+  SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
   PUBLIC_BASE_URL: "https://bankone.cars.tk",
 });
 const session: AuthenticatedSession = {
@@ -25,10 +27,10 @@ const store = { load: async () => session, save: async () => undefined };
 function json(body: unknown) {
   return { status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ header: { statusCode: 200 }, body })) };
 }
-async function appWithTransport(transport: HttpTransport) {
+async function appWithTransport(transport: HttpTransport, appConfig = config) {
   return createApp({
-    config,
-    upstreamClient: new UpstreamApiClient(config, transport),
+    config: appConfig,
+    upstreamClient: new UpstreamApiClient(appConfig, transport),
     sessionManager: new SessionManager(adapter, store, { refreshSkewSeconds: 300 }),
   });
 }
@@ -49,7 +51,7 @@ describe("Bankone source contract", () => {
     expect(first.json()).toMatchObject({ provider: "bankone", selector: { year: 2024, make: "Toyota", model: "4 Runner 4wd" } });
     expect(first.json().candidates).toHaveLength(2);
     expect(first.json().candidates.map((candidate: { opaque_ref: string }) => candidate.opaque_ref)).toEqual(second.json().candidates.map((candidate: { opaque_ref: string }) => candidate.opaque_ref));
-    expect(first.json().candidates[0].opaque_ref).not.toContain("v1");
+    expect(first.json().candidates[0].opaque_ref).not.toContain("vehicleId");
     expect(paths).toContain("/m1/api/source/Toyota/vehicles");
     await app.close();
   });
@@ -60,6 +62,7 @@ describe("Bankone source contract", () => {
     expect(first.statusCode).toBe(200);
     expect(first.json().items).toHaveLength(100);
     expect(first.json().complete).toBe(false);
+    expect(first.json().next_cursor.length).toBeLessThan(512);
     const next = await app.inject({ method: "GET", url: `/v1/catalog/years?cursor=${encodeURIComponent(first.json().next_cursor)}` });
     expect(next.json().items).toHaveLength(1);
     expect(next.json().complete).toBe(true);
@@ -69,32 +72,87 @@ describe("Bankone source contract", () => {
     await app.close();
   });
 
+  it("rejects a page cursor after the source revision changes", async () => {
+    const firstApp = await appWithTransport(async () => json(Array.from({ length: 101 }, (_, year) => 1900 + year)));
+    const first = await firstApp.inject({ method: "GET", url: "/v1/catalog/years" });
+    await firstApp.close();
+    const secondApp = await appWithTransport(async () => json(Array.from({ length: 101 }, (_, year) => 1901 + year)));
+    const next = await secondApp.inject({ method: "GET", url: `/v1/catalog/years?cursor=${encodeURIComponent(first.json().next_cursor)}` });
+    expect(next.statusCode).toBe(409);
+    expect(next.json().error.message).toMatch(/restart pagination/);
+    await secondApp.close();
+  });
+
   it("projects vehicle articles and returns hashed article, labor, and binary resources", async () => {
     const app = await appWithTransport(async (request) => {
-      if (request.url.includes("/articles/v2")) return json({ articleDetails: [{ id: "a1", title: "Water Pump Replacement", bucketName: "Cooling", component: "Pump" }] });
-      if (request.url.includes("/article/a1")) return json({ html: "<h1>Water Pump Replacement</h1>" });
+      if (request.url.includes("/articles/v2")) return json({ articleDetails: [{ id: "a1", title: "Water Pump Replacement", bucketName: "Cooling", component: "Pump", laborArticleId: "a1", graphicIds: ["g1"] }] });
+      if (request.url.includes("/article/a1")) return json({ html: "<h1>Water Pump Replacement</h1><mtr-image id=\"g1\"></mtr-image>" });
       if (request.url.includes("/labor/a1")) return json({ hours: 1.5 });
       if (request.url.includes("/graphic/g1")) return { status: 200, headers: { "content-type": "image/png" }, body: Buffer.from([0, 1, 2]) };
       throw new Error(`Unexpected upstream request: ${request.url}`);
     });
-    const vehicleRef = encodeReference({ kind: "vehicle", catalog: "Toyota", vehicleId: "v1" }, config.session.encryptionKey);
+    const vehicleRef = encodeReference({ kind: "vehicle", catalog: "Toyota", vehicleId: "v1" }, config.sourceRefs);
     const list = await app.inject({ method: "GET", url: `/v1/vehicles/${vehicleRef}/articles` });
     expect(list.statusCode).toBe(200);
     expect(list.json().articles).toHaveLength(1);
     const article = list.json().articles[0];
+    expect(article.asset_resource_refs).toHaveLength(1);
     const search = await app.inject({ method: "POST", url: `/v1/vehicles/${vehicleRef}/article-search`, payload: { query: "water pump" } });
     expect(search.statusCode).toBe(200);
     expect(search.json().articles[0].opaque_ref).toBe(article.opaque_ref);
     const body = await app.inject({ method: "GET", url: `/v1/resources/${article.resource_ref}` });
     expect(body.statusCode).toBe(200);
-    expect(body.json().content).toBe("<h1>Water Pump Replacement</h1>");
+    expect(body.json().content).toContain("<h1>Water Pump Replacement</h1>");
+    expect(body.json().content).toContain("/v1/resources/");
+    expect(body.json().asset_resource_refs).toHaveLength(1);
     expect(body.json().sha256).toBe(createHash("sha256").update(body.json().content).digest("hex"));
+    expect(body.headers["x-request-id"]).toBe(body.json().request_id);
+    expect(body.headers["x-provider"]).toBe("bankone");
+    expect(body.headers["x-source-revision"]).toBe(body.json().source_revision);
+    expect(body.headers["x-fetched-at"]).toBe(body.json().fetched_at);
+    expect(body.headers["x-source-locator"]).toBe(body.json().source_locator);
+    expect(body.headers["x-source-sha256"]).toBe(body.json().sha256);
+    expect(body.headers["x-source-media-type"]).toBe(body.json().media_type);
     const labor = await app.inject({ method: "GET", url: `/v1/resources/${article.labor_resource_ref}` });
     expect(labor.json().kind).toBe("labor");
-    const assetRef = encodeReference({ kind: "asset", catalog: "Toyota", assetKind: "graphic", assetId: "g1" }, config.session.encryptionKey);
+    expect(labor.headers["x-source-sha256"]).toBe(labor.json().sha256);
+    const assetRef = body.json().asset_resource_refs[0];
+    expect(assetRef).toBe(article.asset_resource_refs[0]);
     const asset = await app.inject({ method: "GET", url: `/v1/resources/${assetRef}` });
     expect(asset.json()).toMatchObject({ kind: "asset", media_type: "image/png", content_base64: "AAEC" });
     expect(asset.json().sha256).toBe(createHash("sha256").update(Buffer.from([0, 1, 2])).digest("hex"));
+    expect(asset.headers["x-source-media-type"]).toBe("image/png");
+    const rawAsset = await app.inject({ method: "GET", url: `/v1/resources/${assetRef}`, headers: { accept: "image/png" } });
+    expect(rawAsset.statusCode).toBe(200);
+    expect(rawAsset.rawPayload).toEqual(Buffer.from([0, 1, 2]));
+    expect(rawAsset.headers["x-source-sha256"]).toBe(asset.json().sha256);
+    await app.close();
+  });
+
+  it("keeps provider search hits without literal title matches and omits unproven labor", async () => {
+    const app = await appWithTransport(async (request) => {
+      if (request.url.includes("searchTerm=timing")) return json({ articleDetails: [{ id: "a2", title: "Engine Procedure", bucketName: "Service" }] });
+      throw new Error(`Unexpected upstream request: ${request.url}`);
+    });
+    const vehicleRef = encodeReference({ kind: "vehicle", catalog: "Toyota", vehicleId: "v1" }, config.sourceRefs);
+    const result = await app.inject({ method: "POST", url: `/v1/vehicles/${vehicleRef}/article-search`, payload: { query: "timing" } });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().articles).toHaveLength(1);
+    expect(result.json().articles[0]).not.toHaveProperty("labor_resource_ref");
+    await app.close();
+  });
+
+  it("keeps stored references valid across session and active reference-key rotation", async () => {
+    const ref = encodeReference({ kind: "vehicle", catalog: "Toyota", vehicleId: "v1" }, config.sourceRefs);
+    const rotated = {
+      ...config,
+      session: { ...config.session, encryptionKey: Buffer.from("c".repeat(64), "hex") },
+      sourceRefs: { activeKeyId: "v2", keys: { ...config.sourceRefs.keys, v2: Buffer.from("d".repeat(64), "hex") } },
+    };
+    const app = await appWithTransport(async () => json({ articleDetails: [] }), rotated);
+    const result = await app.inject({ method: "GET", url: `/v1/vehicles/${ref}/articles` });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().articles).toEqual([]);
     await app.close();
   });
 

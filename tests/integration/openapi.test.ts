@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { parse } from "yaml";
 import { loadConfig } from "../../src/config.js";
 import { createApp } from "../../src/server.js";
 
@@ -6,6 +8,8 @@ const config = loadConfig({
   UPSTREAM_ENTRY_URL: "https://search.ebscohost.com/login.aspx?profile=example",
   UPSTREAM_PROMPT_VALUE: "synthetic-prompt",
   SESSION_ENCRYPTION_KEY: "a".repeat(64),
+  SOURCE_REF_ACTIVE_KEY_ID: "v1",
+  SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
   PUBLIC_BASE_URL: "https://connector.test",
 });
 
@@ -73,6 +77,18 @@ describe("OpenAPI", () => {
     expect(document.paths["/v1/api/asset/{handleId}"].get.responses["404"]).toEqual({
       description: "The requested upstream asset is unavailable or invalid",
     });
+    await app.close();
+  });
+
+  it("publishes the exact versioned source paths and schemas", async () => {
+    const canonical = parse(await readFile(new URL("../../src/source-contract/openapi.yaml", import.meta.url), "utf8"));
+    const app = await createApp({ config });
+    const document = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+    for (const [path, operations] of Object.entries(canonical.paths)) {
+      expect(document.paths[path]).toEqual(operations);
+    }
+    expect(document.components.schemas).toEqual(canonical.components.schemas);
+    expect(document.paths["/v1/resources/{opaqueRef}"].get.responses["200"].headers["X-Source-Sha256"].required).toBe(true);
     await app.close();
   });
 });

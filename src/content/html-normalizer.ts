@@ -8,6 +8,7 @@ export type HtmlNormalizationContext = {
   publicCatalog: string;
   vehicleId: string;
   connectorAssetUrl: (target: AssetTarget) => string;
+  connectorArticleUrl?: (articleId: string) => string;
   upstreamOrigin?: string;
   allowedExternalOrigins?: readonly string[];
 };
@@ -30,6 +31,7 @@ const SAFE_ATTRIBUTES = new Set(["id", "class", "title", "alt", "width", "height
 const URL_ATTRIBUTES = new Set(["href", "src", "srcset", "style"]);
 
 function articleUrl(context: HtmlNormalizationContext, articleId: string): string {
+  if (context.connectorArticleUrl) return context.connectorArticleUrl(articleId);
   return `${context.publicBaseUrl}/v1/api/catalog/${encodeURIComponent(context.publicCatalog)}/vehicle/${encodeURIComponent(context.vehicleId)}/article/${encodeURIComponent(articleId)}`;
 }
 

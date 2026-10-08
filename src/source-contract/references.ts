@@ -1,5 +1,8 @@
 import { createCipheriv, createDecipheriv, createHmac, timingSafeEqual } from "node:crypto";
 import { ConnectorError } from "../errors.js";
+import type { Config } from "../config.js";
+
+type ReferenceKeys = Config["sourceRefs"];
 
 export type SourceReference = {
   kind: "vehicle" | "article" | "labor" | "asset" | "cursor";
@@ -11,22 +14,27 @@ export type SourceReference = {
   scope?: string;
   filter?: string;
   offset?: number;
+  revision?: string;
 };
 
 // A deterministic nonce makes a given source identity stable across processes.
 // It is derived from the entire plaintext, so distinct identities use distinct nonces.
-export function encodeReference(reference: SourceReference, key: Buffer): string {
+export function encodeReference(reference: SourceReference, keyring: ReferenceKeys): string {
+  const key = keyring.keys[keyring.activeKeyId];
   const plaintext = Buffer.from(JSON.stringify(reference), "utf8");
   const nonce = createHmac("sha256", key).update("bankone-source-ref-v1\0").update(plaintext).digest().subarray(0, 12);
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return `b1.${Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]).toString("base64url")}`;
+  return `b1.${keyring.activeKeyId}.${Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]).toString("base64url")}`;
 }
 
-export function decodeReference(value: string, key: Buffer, expected?: SourceReference["kind"]): SourceReference {
-  if (!/^b1\.[A-Za-z0-9_-]{40,2000}$/.test(value)) throw new ConnectorError("invalid_request", "Invalid source reference", 400);
+export function decodeReference(value: string, keyring: ReferenceKeys, expected?: SourceReference["kind"]): SourceReference {
+  if (!/^b1\.[A-Za-z0-9_-]{1,24}\.[A-Za-z0-9_-]{40,2000}$/.test(value)) throw new ConnectorError("invalid_request", "Invalid source reference", 400);
   try {
-    const bytes = Buffer.from(value.slice(3), "base64url");
+    const [, keyId, encoded] = value.match(/^b1\.([A-Za-z0-9_-]{1,24})\.([A-Za-z0-9_-]+)$/) ?? [];
+    const key = keyring.keys[keyId];
+    if (!key) throw new Error("unknown reference key");
+    const bytes = Buffer.from(encoded, "base64url");
     const nonce = bytes.subarray(0, 12);
     const decipher = createDecipheriv("aes-256-gcm", key, nonce);
     decipher.setAuthTag(bytes.subarray(12, 28));

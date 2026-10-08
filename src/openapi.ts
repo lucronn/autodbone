@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { OpenAPIV3 } from "openapi-types";
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
 import { PUBLIC_API_ROUTES } from "./routes/api-routes.js";
 import { UPSTREAM_ROUTES } from "./upstream/route-registry.js";
 
@@ -48,7 +50,7 @@ function openApiParameter(name: string, location: "path" | "query", required: bo
 }
 
 export async function registerOpenApi(app: FastifyInstance): Promise<void> {
-  const openapi = app.swagger?.();
+  const openapi = app.swagger?.() as OpenAPIV3.Document | undefined;
   if (!openapi) return;
   openapi.paths ??= {};
   for (const route of PUBLIC_API_ROUTES) {
@@ -76,21 +78,9 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
       },
     };
   }
-  const sourcePaths = [
-    ["/v1/capabilities", "get", "capabilities"],
-    ["/v1/catalog/{scope}", "get", "readCatalog"],
-    ["/v1/vehicle-resolutions", "post", "resolveVehicle"],
-    ["/v1/vehicles/{opaqueRef}/articles", "get", "listArticles"],
-    ["/v1/vehicles/{opaqueRef}/article-search", "post", "searchArticles"],
-    ["/v1/resources/{opaqueRef}", "get", "readResource"],
-  ] as const;
-  for (const [path, method, operationId] of sourcePaths) {
-    openapi.paths[path] ??= {};
-    (openapi.paths[path] as Record<string, unknown>)[method] = {
-      operationId,
-      summary: `Source contract ${operationId}`,
-      parameters: [...path.matchAll(/\{([^}]+)\}/g)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } })),
-      responses: { "200": { description: "Versioned source contract response" }, "400": { description: "Invalid input" }, "502": { description: "Upstream failure" } },
-    };
-  }
+  const contract = parse(readFileSync(new URL("./source-contract/openapi.yaml", import.meta.url), "utf8")) as OpenAPIV3.Document;
+  Object.assign(openapi.paths, contract.paths);
+  openapi.components = { ...openapi.components, ...contract.components };
+  openapi.servers = contract.servers;
+  openapi.info.version = contract.info.version;
 }

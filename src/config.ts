@@ -17,6 +17,10 @@ export type Config = {
     refreshSkewSeconds: number;
     validationPath: string;
   };
+  sourceRefs: {
+    activeKeyId: string;
+    keys: Record<string, Buffer>;
+  };
   limits: {
     requestTimeoutMs: number;
     maxResponseBytes: number;
@@ -75,6 +79,24 @@ function optionalBaseUrl(value: string | undefined): string | undefined {
   return url.toString().replace(/\/$/, "");
 }
 
+function sourceReferenceKeys(env: NodeJS.ProcessEnv): Config["sourceRefs"] {
+  const activeKeyId = required(env, "SOURCE_REF_ACTIVE_KEY_ID");
+  if (!/^[A-Za-z0-9_-]{1,24}$/.test(activeKeyId)) throw new Error("SOURCE_REF_ACTIVE_KEY_ID is invalid");
+  let parsed: unknown;
+  try { parsed = JSON.parse(required(env, "SOURCE_REF_KEYS_JSON")); }
+  catch { throw new Error("SOURCE_REF_KEYS_JSON must be a JSON object"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("SOURCE_REF_KEYS_JSON must be a JSON object");
+  const keys: Record<string, Buffer> = Object.create(null);
+  for (const [keyId, hex] of Object.entries(parsed)) {
+    if (!/^[A-Za-z0-9_-]{1,24}$/.test(keyId) || typeof hex !== "string" || !/^[a-f0-9]{64}$/i.test(hex)) {
+      throw new Error("SOURCE_REF_KEYS_JSON contains an invalid key");
+    }
+    keys[keyId] = Buffer.from(hex, "hex");
+  }
+  if (!keys[activeKeyId]) throw new Error("SOURCE_REF_ACTIVE_KEY_ID must exist in SOURCE_REF_KEYS_JSON");
+  return { activeKeyId, keys };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const entryUrl = required(env, "UPSTREAM_ENTRY_URL");
   const entry = new URL(entryUrl);
@@ -83,6 +105,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const promptValue = required(env, "UPSTREAM_PROMPT_VALUE");
   const keyHex = required(env, "SESSION_ENCRYPTION_KEY");
   if (!/^[a-f0-9]{64}$/i.test(keyHex)) throw new Error("SESSION_ENCRYPTION_KEY must be 32 bytes encoded as 64 hex characters");
+  const sourceRefs = sourceReferenceKeys(env);
+  if (Object.values(sourceRefs.keys).some((key) => key.toString("hex") === keyHex.toLowerCase())) {
+    throw new Error("SOURCE_REF_KEYS_JSON must use keys separate from SESSION_ENCRYPTION_KEY");
+  }
 
   const sources = (env.UPSTREAM_ALLOWED_CONTENT_SOURCES ?? defaults.allowedContentSources.join(","))
     .split(",")
@@ -107,6 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       refreshSkewSeconds: positiveInteger(env, "SESSION_REFRESH_SKEW_SECONDS", defaults.refreshSkewSeconds),
       validationPath: env.SESSION_VALIDATION_PATH?.trim() || defaults.validationPath,
     },
+    sourceRefs,
     limits: {
       requestTimeoutMs: positiveInteger(env, "REQUEST_TIMEOUT_MS", defaults.requestTimeoutMs),
       maxResponseBytes: positiveInteger(env, "MAX_RESPONSE_BYTES", defaults.maxResponseBytes),

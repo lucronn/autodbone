@@ -6,6 +6,7 @@ import type { UpstreamRouteId, UpstreamRouteParams } from "../upstream/route-reg
 import type { UpstreamEnvelope } from "../upstream/upstream-client.js";
 import { articleRows, chooseCatalog, matchesMake, matchesModel, modelVehicleIds, normalizeLabel, reportedArticleCount, requireEnvelope, rows, sha256, sourceRevision, textField } from "./projections.js";
 import { decodeReference, encodeReference, type SourceReference } from "./references.js";
+import { normalizeHtml } from "../content/html-normalizer.js";
 
 const PAGE_SIZE = 100;
 type RecordValue = Record<string, unknown>;
@@ -42,6 +43,17 @@ function envelope(ctx: SourceContext, revisions: Buffer[], locator: string) {
     source_locator: `bankone:${locator}`,
   };
 }
+function resourceHeaders(ctx: SourceContext, metadata: ReturnType<typeof envelope>, contentHash: string, mediaType: string): void {
+  ctx.reply.header("x-provider", metadata.provider);
+  ctx.reply.header("x-source-revision", metadata.source_revision);
+  ctx.reply.header("x-fetched-at", metadata.fetched_at);
+  ctx.reply.header("x-source-locator", metadata.source_locator);
+  ctx.reply.header("x-source-sha256", contentHash);
+  ctx.reply.header("x-source-media-type", mediaType);
+}
+function publicBaseUrl(ctx: SourceContext): string {
+  return ctx.deps.config.publicBaseUrl ?? `${ctx.request.protocol}://${ctx.request.hostname}`;
+}
 function locator(route: string, params: RecordValue): string {
   return `${route}:${sha256(Buffer.from(JSON.stringify(params))).slice(0, 24)}`;
 }
@@ -71,17 +83,18 @@ async function fetchBytes(ctx: SourceContext, routeId: UpstreamRouteId, params: 
   if (response.status < 200 || response.status >= 300) fail("UPSTREAM_UNAVAILABLE", "Upstream request failed", 502, true);
   return response;
 }
-function page<T>(ctx: SourceContext, values: T[], scope: string, filter: string, cursor: unknown) {
+function page<T>(ctx: SourceContext, values: T[], scope: string, filter: string, cursor: unknown, revision: string) {
   const filterHash = sha256(Buffer.from(filter));
   let offset = 0;
   if (cursor !== undefined) {
-    const ref = decodeReference(string(cursor, "cursor"), ctx.deps.config.session.encryptionKey, "cursor");
+    const ref = decodeReference(string(cursor, "cursor"), ctx.deps.config.sourceRefs, "cursor");
     if (ref.scope !== scope || ref.filter !== filterHash || !Number.isSafeInteger(ref.offset) || (ref.offset ?? -1) < 0) fail("INVALID_INPUT", "cursor does not match request", 400);
+    if (ref.revision !== revision) fail("INVALID_INPUT", "Source changed; restart pagination", 409);
     offset = ref.offset!;
   }
   if (offset > values.length) fail("INVALID_INPUT", "cursor is out of range", 400);
   const items = values.slice(offset, offset + PAGE_SIZE);
-  const next = offset + items.length < values.length ? encodeReference({ kind: "cursor", scope, filter: filterHash, offset: offset + items.length }, ctx.deps.config.session.encryptionKey) : undefined;
+  const next = offset + items.length < values.length ? encodeReference({ kind: "cursor", scope, filter: filterHash, offset: offset + items.length, revision }, ctx.deps.config.sourceRefs) : undefined;
   return { items, complete: next === undefined, ...(next ? { next_cursor: next } : {}) };
 }
 function sourceError(error: unknown, requestId: string) {
@@ -149,21 +162,21 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
       const values = Array.isArray(body) ? body : rows(result.envelope);
       items = values.map((value) => {
         const resolvedYear = typeof value === "number" || typeof value === "string" ? Number(value) : Number(textField(value, "year", "modelYear", "value"));
-        return Number.isInteger(resolvedYear) ? { opaque_ref: encodeReference({ kind: "cursor", scope: "year", filter: String(resolvedYear), offset: 0 }, deps.config.session.encryptionKey), label: String(resolvedYear), year: resolvedYear } : null;
+        return Number.isInteger(resolvedYear) ? { opaque_ref: encodeReference({ kind: "cursor", scope: "year", filter: String(resolvedYear), offset: 0 }, deps.config.sourceRefs), label: String(resolvedYear), year: resolvedYear } : null;
       }).filter((value) => value !== null);
     } else if (scope === "makes") {
       const result = await fetchSource(ctx, "makes", { year: requestedYear });
       revisions = [result.bytes];
       items = rows(result.envelope).map((item) => {
         const make = textField(item, "makeName", "name", "make");
-        return make ? { opaque_ref: encodeReference({ kind: "cursor", scope: "make", filter: `${requestedYear}:${make}`, offset: 0 }, deps.config.session.encryptionKey), label: make, year: requestedYear, make } : null;
+        return make ? { opaque_ref: encodeReference({ kind: "cursor", scope: "make", filter: `${requestedYear}:${make}`, offset: 0 }, deps.config.sourceRefs), label: make, year: requestedYear, make } : null;
       }).filter((value) => value !== null);
     } else if (scope === "models") {
       const result = await fetchSource(ctx, "models", { year: requestedYear, make: requestedMake });
       revisions = [result.bytes];
       items = rows(result.envelope).map((item) => {
         const model = textField(item, "modelName", "model", "name");
-        return model ? { opaque_ref: encodeReference({ kind: "cursor", scope: "model", filter: `${requestedYear}:${requestedMake}:${model}`, offset: 0 }, deps.config.session.encryptionKey), label: model, year: requestedYear, make: requestedMake, model } : null;
+        return model ? { opaque_ref: encodeReference({ kind: "cursor", scope: "model", filter: `${requestedYear}:${requestedMake}:${model}`, offset: 0 }, deps.config.sourceRefs), label: model, year: requestedYear, make: requestedMake, model } : null;
       }).filter((value) => value !== null);
     } else {
       const result = await matchingModels(ctx, { year: requestedYear!, make: requestedMake!, model: requestedModel! });
@@ -172,10 +185,20 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
         const vehicleId = textField(item, "vehicleId", "id", "vehicle_id");
         if (!vehicleId) return null;
         const label = textField(item, "vehicleName", "displayName", "name", "modelName") || `${requestedYear} ${requestedMake} ${requestedModel}`;
-        return { opaque_ref: encodeReference({ kind: "vehicle", catalog: result.catalog, vehicleId }, deps.config.session.encryptionKey), label, year: requestedYear, make: requestedMake, model: requestedModel, configuration: label };
+        const engine = textField(item, "engine", "engineName", "engineDescription");
+        const drivetrain = textField(item, "drivetrain", "driveType", "driveTrain");
+        const region = textField(item, "region", "market");
+        return {
+          opaque_ref: encodeReference({ kind: "vehicle", catalog: result.catalog, vehicleId }, deps.config.sourceRefs),
+          label: label.slice(0, 512), year: requestedYear, make: requestedMake, model: requestedModel,
+          configuration: label.slice(0, 512),
+          ...(engine ? { engine: engine.slice(0, 256) } : {}),
+          ...(drivetrain ? { drivetrain: drivetrain.slice(0, 128) } : {}),
+          ...(region ? { region: region.slice(0, 64) } : {}),
+        };
       }).filter((value) => value !== null);
     }
-    const pagination = page(ctx, items, scope, filter, query.cursor);
+    const pagination = page(ctx, items, scope, filter, query.cursor, sourceRevision(Buffer.concat(revisions)));
     return { ...envelope(ctx, revisions, locator(`catalog:${scope}`, { year: requestedYear, make: requestedMake, model: requestedModel })), scope, items: pagination.items, complete: pagination.complete, ...(pagination.next_cursor ? { next_cursor: pagination.next_cursor } : {}) };
   });
 
@@ -190,7 +213,7 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
       if (!vehicleId) return null;
       const label = textField(item, "vehicleName", "displayName", "name", "modelName") || `${selector.year} ${selector.make} ${selector.model}`;
       if (selector.configuration && !normalizeLabel(label).includes(normalizeLabel(selector.configuration))) return null;
-      return { opaque_ref: encodeReference({ kind: "vehicle", catalog: result.catalog, vehicleId }, deps.config.session.encryptionKey), label: label.slice(0, 512), confidence: selector.configuration ? 0.95 : 0.8, evidence: [`${selector.year} ${selector.make} ${selector.model}`] };
+      return { opaque_ref: encodeReference({ kind: "vehicle", catalog: result.catalog, vehicleId }, deps.config.sourceRefs), label: label.slice(0, 512), confidence: selector.configuration ? 0.95 : 0.8, evidence: [`${selector.year} ${selector.make} ${selector.model}`] };
     }).filter((item): item is NonNullable<typeof item> => item !== null);
     if (candidates.length > 100) fail("INVALID_UPSTREAM_RESPONSE", "Vehicle resolution exceeds the supported bound", 502);
     return { ...envelope(ctx, result.sources, locator("vehicle-resolution", selector)), selector, candidates };
@@ -198,15 +221,14 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
 
   const articles = async (ctx: SourceContext, search?: string) => {
     const { opaqueRef } = ctx.request.params as { opaqueRef: string };
-    const ref = decodeReference(opaqueRef, deps.config.session.encryptionKey, "vehicle");
+    const ref = decodeReference(opaqueRef, deps.config.sourceRefs, "vehicle");
     if (!ref.catalog || !ref.vehicleId || !deps.config.upstream.allowedContentSources.includes(ref.catalog)) fail("INVALID_INPUT", "Invalid vehicle reference", 400);
     const query = ctx.request.query as RecordValue;
     if (search === undefined) onlyKeys(query, ["cursor"]);
     const cursor = search === undefined ? query.cursor : (ctx.request.body as RecordValue).cursor;
     const upstream = await fetchSource(ctx, "articles", { contentSource: ref.catalog, vehicleId: ref.vehicleId, ...(search ? { searchTerm: search } : {}) });
-    let projected = articleRows(upstream.envelope, ref.catalog, ref.vehicleId, deps.config.session.encryptionKey);
-    if (search) projected = projected.filter((article) => normalizeLabel(`${article.title} ${article.category ?? ""} ${article.component ?? ""}`).includes(normalizeLabel(search)));
-    const pagination = page(ctx, projected, "articles", `${opaqueRef}:${search ?? ""}`, cursor);
+    const projected = articleRows(upstream.envelope, ref.catalog, ref.vehicleId, deps.config.sourceRefs);
+    const pagination = page(ctx, projected, "articles", `${opaqueRef}:${search ?? ""}`, cursor, sourceRevision(upstream.bytes));
     const upstreamCount = reportedArticleCount(upstream.envelope);
     if (upstreamCount !== undefined && upstreamCount > projected.length && !search) fail("INVALID_UPSTREAM_RESPONSE", "Article index is incomplete", 502);
     const complete = pagination.complete;
@@ -223,22 +245,47 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
 
   register(app, "get", "/v1/resources/:opaqueRef", deps, async (ctx) => {
     const { opaqueRef } = ctx.request.params as { opaqueRef: string };
-    const ref = decodeReference(opaqueRef, deps.config.session.encryptionKey);
+    const ref = decodeReference(opaqueRef, deps.config.sourceRefs);
     if (ref.kind === "article" || ref.kind === "labor") {
       if (!ref.catalog || !ref.vehicleId || !ref.articleId || !deps.config.upstream.allowedContentSources.includes(ref.catalog)) fail("INVALID_INPUT", "Invalid resource reference", 400);
       const result = await fetchSource(ctx, ref.kind === "article" ? "article" : "labor", { contentSource: ref.catalog, vehicleId: ref.vehicleId, articleId: ref.articleId });
       const body = result.envelope.body;
-      const content = ref.kind === "article" && typeof (body as RecordValue)?.html === "string" ? String((body as RecordValue).html) : JSON.stringify(body);
+      const rawHtml = ref.kind === "article" && typeof (body as RecordValue)?.html === "string" ? String((body as RecordValue).html) : undefined;
+      const assetResourceRefs = new Set<string>();
+      const baseUrl = publicBaseUrl(ctx);
+      const content = rawHtml === undefined ? JSON.stringify(body) : normalizeHtml(rawHtml, {
+        publicBaseUrl: baseUrl,
+        contentSource: ref.catalog,
+        publicCatalog: ref.catalog,
+        vehicleId: ref.vehicleId,
+        upstreamOrigin: deps.config.upstream.apiOrigin,
+        connectorAssetUrl: (target) => {
+          const catalog = target.source ?? ref.catalog!;
+          if (!deps.config.upstream.allowedContentSources.includes(catalog)) fail("INVALID_UPSTREAM_RESPONSE", "Article references a disallowed source", 502);
+          const assetRef = encodeReference({ kind: "asset", catalog, assetKind: target.kind === "asset" ? "asset" : "graphic", assetId: target.id }, deps.config.sourceRefs);
+          assetResourceRefs.add(assetRef);
+          return `${baseUrl}/v1/resources/${assetRef}`;
+        },
+        connectorArticleUrl: (articleId) => `${baseUrl}/v1/resources/${encodeReference({ kind: "article", catalog: ref.catalog, vehicleId: ref.vehicleId, articleId }, deps.config.sourceRefs)}`,
+      }).html;
       if (content.length > 10_000_000) fail("INVALID_UPSTREAM_RESPONSE", "Source resource is too large", 502);
-      const mediaType = ref.kind === "article" && typeof (body as RecordValue)?.html === "string" ? "text/html" : "application/json";
-      return { ...envelope(ctx, [result.bytes], locator(ref.kind, { catalog: ref.catalog, vehicleId: ref.vehicleId, articleId: ref.articleId })), kind: ref.kind, media_type: mediaType, content, sha256: sha256(Buffer.from(content)) };
+      const mediaType = rawHtml !== undefined ? "text/html" : "application/json";
+      const metadata = envelope(ctx, [result.bytes], locator(ref.kind, { catalog: ref.catalog, vehicleId: ref.vehicleId, articleId: ref.articleId }));
+      const contentHash = sha256(Buffer.from(content));
+      resourceHeaders(ctx, metadata, contentHash, mediaType);
+      return { ...metadata, kind: ref.kind, media_type: mediaType, content, sha256: contentHash, ...(assetResourceRefs.size ? { asset_resource_refs: [...assetResourceRefs] } : {}) };
     }
     if (ref.kind === "asset" && ref.assetId && (ref.assetKind === "graphic" || ref.assetKind === "asset")) {
       if (ref.assetKind === "graphic" && (!ref.catalog || !deps.config.upstream.allowedContentSources.includes(ref.catalog))) fail("INVALID_INPUT", "Invalid asset reference", 400);
       const result = await fetchBytes(ctx, ref.assetKind, ref.assetKind === "graphic" ? { contentSource: ref.catalog, id: ref.assetId } : { handleId: ref.assetId });
       if (result.body.length > 15_000_000) fail("INVALID_UPSTREAM_RESPONSE", "Source asset exceeds the contract size limit", 502);
       const mediaType = String(result.headers["content-type"] ?? "application/octet-stream").split(";")[0].slice(0, 128);
-      return { ...envelope(ctx, [result.body], locator("asset", { kind: ref.assetKind, id: ref.assetId })), kind: "asset", media_type: mediaType, content_base64: result.body.toString("base64"), sha256: sha256(result.body) };
+      const metadata = envelope(ctx, [result.body], locator("asset", { kind: ref.assetKind, id: ref.assetId }));
+      const contentHash = sha256(result.body);
+      resourceHeaders(ctx, metadata, contentHash, mediaType);
+      const accept = String(ctx.request.headers.accept ?? "");
+      if (accept.includes("image/") || accept.includes("application/octet-stream")) return ctx.reply.type(mediaType).send(result.body);
+      return { ...metadata, kind: "asset", media_type: mediaType, content_base64: result.body.toString("base64"), sha256: contentHash };
     }
     fail("INVALID_INPUT", "Invalid resource reference", 400);
   });

@@ -21,6 +21,7 @@ Supply all upstream authentication values through runtime secrets. The required 
 - `UPSTREAM_ENTRY_URL`: the authorized entry URL for the institution/profile.
 - `UPSTREAM_PROMPT_VALUE`: the authorized prompted-login value.
 - `SESSION_ENCRYPTION_KEY`: a 32-byte key encoded as 64 hexadecimal characters.
+- `SOURCE_REF_ACTIVE_KEY_ID` and `SOURCE_REF_KEYS_JSON`: a separately managed, versioned 32-byte reference keyring. Keep older keys in the JSON map while stored opaque references still use them; rotate by adding a new key ID and making it active. Session-key rotation does not change source references.
 
 The prompt value is an access credential. The connector does not bypass provider entitlement controls; the operator must supply authorized access.
 
@@ -28,7 +29,7 @@ For development, `npm run dev` starts the TypeScript watcher. The default bind i
 
 ### Vercel
 
-The `src/server.ts` Fastify entrypoint also exports the Vercel Node.js handler. Configure `UPSTREAM_ENTRY_URL`, `UPSTREAM_PROMPT_VALUE`, `SESSION_ENCRYPTION_KEY`, `SESSION_FILE_PATH=/tmp/bankone-session.enc`, and `PUBLIC_BASE_URL=https://bankone.cars.tk` in Bankone's own Vercel project. Attach `bankone.cars.tk` directly to that project after the nonproduction contract check. Vercel function filesystems are ephemeral, so durable server-session persistence requires an external encrypted store before relying on reauthentication across cold starts. Apply the service access policy at Bankone's ingress. This repository has no AutoData database or object-store dependency.
+The `src/server.ts` Fastify entrypoint also exports the Vercel Node.js handler. Configure `UPSTREAM_ENTRY_URL`, `UPSTREAM_PROMPT_VALUE`, `SESSION_ENCRYPTION_KEY`, `SOURCE_REF_ACTIVE_KEY_ID`, `SOURCE_REF_KEYS_JSON`, `SESSION_FILE_PATH=/tmp/bankone-session.enc`, and `PUBLIC_BASE_URL=https://bankone.cars.tk` in Bankone's own Vercel project. Attach `bankone.cars.tk` directly to that project after the nonproduction contract check. Vercel function filesystems are ephemeral, so durable server-session persistence requires an external encrypted store before relying on reauthentication across cold starts. Apply the service access policy at Bankone's ingress. This repository has no AutoData database or object-store dependency.
 
 ## Authentication and persistence
 
@@ -57,7 +58,7 @@ Caller requests are admitted through a per-client sliding-window limit before an
 
 The legacy `/v1/api/*` connector routes are `GET`. Upstream response envelopes are retained as `{ header, body }`. Upstream non-2xx responses become a sanitized connector error with a request ID and upstream status; upstream headers, cookies, and bodies are not included in errors.
 
-The provider-neutral source contract lives at `/v1`. Bankone implements `GET /v1/capabilities`, `GET /v1/catalog/{scope}`, `POST /v1/vehicle-resolutions`, `GET /v1/vehicles/{opaqueRef}/articles`, `POST /v1/vehicles/{opaqueRef}/article-search`, and `GET /v1/resources/{opaqueRef}`. `scope` is `years`, `makes`, `models`, or `configurations`. List responses carry `complete` and a bound `next_cursor` when another page exists. Ambiguous vehicle matches remain separate candidates. Vehicle, article, resource, and cursor references are stable authenticated encrypted values; callers cannot choose upstream targets through them. Article and labor responses include SHA-256 over returned content, and binary resources include SHA-256 over decoded bytes. The contract's source envelope carries a request ID, `bankone` provider, source revision, retrieval time, and bank-owned source locator.
+The provider-neutral source contract lives at `/v1`. Bankone implements `GET /v1/capabilities`, `GET /v1/catalog/{scope}`, `POST /v1/vehicle-resolutions`, `GET /v1/vehicles/{opaqueRef}/articles`, `POST /v1/vehicles/{opaqueRef}/article-search`, and `GET /v1/resources/{opaqueRef}`. `scope` is `years`, `makes`, `models`, or `configurations`. List responses carry `complete` and a bound `next_cursor` when another page exists. Ambiguous vehicle matches remain separate candidates. Vehicle, article, resource, and cursor references are stable authenticated encrypted values; callers cannot choose upstream targets through them. Article and labor responses include SHA-256 over returned content, and binary resources include SHA-256 over decoded bytes. Article resources expose `asset_resource_refs` and content links that resolve through `/v1/resources`. All resource responses emit provenance headers. Catalog cursors bind to the source revision, so callers restart pagination if the upstream list changes. The contract's source envelope carries a request ID, `bankone` provider, source revision, retrieval time, and bank-owned source locator.
 
 Catalog and vehicle routes:
 
@@ -148,7 +149,8 @@ The OpenAPI document describes the public legacy and source-contract routes. No 
 | `UPSTREAM_API_ORIGIN`, `UPSTREAM_LOGIN_ORIGIN` | HTTPS upstream origins |
 | `UPSTREAM_ALLOWED_CONTENT_SOURCES` | Comma-separated source allowlist |
 | `SESSION_FILE_PATH` | Encrypted server-session location |
-| `SESSION_ENCRYPTION_KEY` | 32-byte hex encryption/signing key |
+| `SESSION_ENCRYPTION_KEY` | 32-byte hex session encryption key |
+| `SOURCE_REF_ACTIVE_KEY_ID`, `SOURCE_REF_KEYS_JSON` | Versioned source-reference keyring, managed separately from session encryption |
 | `SESSION_REFRESH_SKEW_SECONDS` | Explicit expiry safety window |
 | `REQUEST_TIMEOUT_MS` | Per-upstream-request timeout |
 | `MAX_RESPONSE_BYTES`, `MAX_ASSET_BYTES` | Bounded upstream response sizes |

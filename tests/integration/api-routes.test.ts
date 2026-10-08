@@ -13,6 +13,8 @@ const config = loadConfig({
   UPSTREAM_ENTRY_URL: "https://search.ebscohost.com/login.aspx?profile=example",
   UPSTREAM_PROMPT_VALUE: "synthetic-prompt",
   SESSION_ENCRYPTION_KEY: "a".repeat(64),
+  SOURCE_REF_ACTIVE_KEY_ID: "v1",
+  SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
   PUBLIC_BASE_URL: "https://connector.test",
 });
 const session: AuthenticatedSession = {
@@ -72,6 +74,8 @@ describe("public API routes", () => {
       UPSTREAM_ENTRY_URL: "https://search.ebscohost.com/login.aspx?profile=example",
       UPSTREAM_PROMPT_VALUE: "synthetic-prompt",
       SESSION_ENCRYPTION_KEY: "a".repeat(64),
+      SOURCE_REF_ACTIVE_KEY_ID: "v1",
+      SOURCE_REF_KEYS_JSON: JSON.stringify({ v1: "b".repeat(64) }),
     });
     const responseBody = await fixture("article-component-location.json");
     const app = await appWithTransport(async () => ({ status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(responseBody) }), proxyConfig);
