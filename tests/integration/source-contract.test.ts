@@ -102,8 +102,8 @@ describe("Bankone source contract", () => {
     expect(search.json().articles[0].opaque_ref).toBe(article.opaque_ref);
     const body = await app.inject({ method: "GET", url: `/v1/resources/${article.resource_ref}` });
     expect(body.statusCode).toBe(200);
-    expect(body.json().content).toContain("<h1>Water Pump Replacement</h1>");
-    expect(body.json().content).toContain("/v1/resources/");
+    expect(body.json().content).toBe('<h1>Water Pump Replacement</h1><mtr-image id="g1"></mtr-image>');
+    expect(body.json().content).not.toContain("/v1/resources/");
     expect(body.json().asset_resource_refs).toHaveLength(1);
     expect(body.json().sha256).toBe(createHash("sha256").update(body.json().content).digest("hex"));
     expect(body.headers["x-request-id"]).toBe(body.json().request_id);
@@ -122,10 +122,15 @@ describe("Bankone source contract", () => {
     expect(asset.json()).toMatchObject({ kind: "asset", media_type: "image/png", content_base64: "AAEC" });
     expect(asset.json().sha256).toBe(createHash("sha256").update(Buffer.from([0, 1, 2])).digest("hex"));
     expect(asset.headers["x-source-media-type"]).toBe("image/png");
-    const rawAsset = await app.inject({ method: "GET", url: `/v1/resources/${assetRef}`, headers: { accept: "image/png" } });
+    const rawAsset = await app.inject({ method: "GET", url: `/v1/resources/${assetRef}`, headers: { accept: "application/octet-stream" } });
     expect(rawAsset.statusCode).toBe(200);
     expect(rawAsset.rawPayload).toEqual(Buffer.from([0, 1, 2]));
+    expect(rawAsset.headers["content-type"]).toContain("application/octet-stream");
+    expect(rawAsset.headers["x-source-media-type"]).toBe("image/png");
     expect(rawAsset.headers["x-source-sha256"]).toBe(asset.json().sha256);
+    const imageAccept = await app.inject({ method: "GET", url: `/v1/resources/${assetRef}`, headers: { accept: "image/png" } });
+    expect(imageAccept.headers["content-type"]).toContain("application/json");
+    expect(imageAccept.json().media_type).toBe("image/png");
     await app.close();
   });
 

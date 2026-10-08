@@ -89,6 +89,10 @@ describe("OpenAPI", () => {
     }
     expect(document.components.schemas).toEqual(canonical.components.schemas);
     expect(document.paths["/v1/resources/{opaqueRef}"].get.responses["200"].headers["X-Source-Sha256"].required).toBe(true);
+    expect(Object.keys(document.paths["/v1/resources/{opaqueRef}"].get.responses["200"].content).sort()).toEqual([
+      "application/json",
+      "application/octet-stream",
+    ]);
     await app.close();
   });
 });

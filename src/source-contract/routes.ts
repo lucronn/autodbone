@@ -253,21 +253,25 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
       const rawHtml = ref.kind === "article" && typeof (body as RecordValue)?.html === "string" ? String((body as RecordValue).html) : undefined;
       const assetResourceRefs = new Set<string>();
       const baseUrl = publicBaseUrl(ctx);
-      const content = rawHtml === undefined ? JSON.stringify(body) : normalizeHtml(rawHtml, {
-        publicBaseUrl: baseUrl,
-        contentSource: ref.catalog,
-        publicCatalog: ref.catalog,
-        vehicleId: ref.vehicleId,
-        upstreamOrigin: deps.config.upstream.apiOrigin,
-        connectorAssetUrl: (target) => {
-          const catalog = target.source ?? ref.catalog!;
-          if (!deps.config.upstream.allowedContentSources.includes(catalog)) fail("INVALID_UPSTREAM_RESPONSE", "Article references a disallowed source", 502);
-          const assetRef = encodeReference({ kind: "asset", catalog, assetKind: target.kind === "asset" ? "asset" : "graphic", assetId: target.id }, deps.config.sourceRefs);
-          assetResourceRefs.add(assetRef);
-          return `${baseUrl}/v1/resources/${assetRef}`;
-        },
-        connectorArticleUrl: (articleId) => `${baseUrl}/v1/resources/${encodeReference({ kind: "article", catalog: ref.catalog, vehicleId: ref.vehicleId, articleId }, deps.config.sourceRefs)}`,
-      }).html;
+      if (rawHtml !== undefined) {
+        // Scan provider markup inside Bankone to discover resource relationships.
+        // The normalized presentation is deliberately discarded: `content` stays raw.
+        normalizeHtml(rawHtml, {
+          publicBaseUrl: baseUrl,
+          contentSource: ref.catalog,
+          publicCatalog: ref.catalog,
+          vehicleId: ref.vehicleId,
+          upstreamOrigin: deps.config.upstream.apiOrigin,
+          connectorAssetUrl: (target) => {
+            const catalog = target.source ?? ref.catalog!;
+            if (!deps.config.upstream.allowedContentSources.includes(catalog)) fail("INVALID_UPSTREAM_RESPONSE", "Article references a disallowed source", 502);
+            const assetRef = encodeReference({ kind: "asset", catalog, assetKind: target.kind === "asset" ? "asset" : "graphic", assetId: target.id }, deps.config.sourceRefs);
+            assetResourceRefs.add(assetRef);
+            return `${baseUrl}/v1/resources/${assetRef}`;
+          },
+        });
+      }
+      const content = rawHtml ?? JSON.stringify(body);
       if (content.length > 10_000_000) fail("INVALID_UPSTREAM_RESPONSE", "Source resource is too large", 502);
       const mediaType = rawHtml !== undefined ? "text/html" : "application/json";
       const metadata = envelope(ctx, [result.bytes], locator(ref.kind, { catalog: ref.catalog, vehicleId: ref.vehicleId, articleId: ref.articleId }));
@@ -284,7 +288,9 @@ export function registerSourceContractRoutes(app: FastifyInstance, deps: ApiRout
       const contentHash = sha256(result.body);
       resourceHeaders(ctx, metadata, contentHash, mediaType);
       const accept = String(ctx.request.headers.accept ?? "");
-      if (accept.includes("image/") || accept.includes("application/octet-stream")) return ctx.reply.type(mediaType).send(result.body);
+      if (accept.split(",").some((value) => value.trim().split(";")[0] === "application/octet-stream")) {
+        return ctx.reply.type("application/octet-stream").send(result.body);
+      }
       return { ...metadata, kind: "asset", media_type: mediaType, content_base64: result.body.toString("base64"), sha256: contentHash };
     }
     fail("INVALID_INPUT", "Invalid resource reference", 400);
