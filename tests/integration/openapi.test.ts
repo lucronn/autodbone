@@ -86,8 +86,14 @@ describe("OpenAPI", () => {
     const document = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
     expect(document.openapi).toBe("3.1.0");
     expect(document.openapi).toBe(canonical.openapi);
-    for (const [path, operations] of Object.entries(canonical.paths)) {
-      expect(document.paths[path]).toEqual(operations);
+    expect(document.security).toEqual([{ BankoneBearer: [] }]);
+    expect(document.components.securitySchemes.BankoneBearer).toBeDefined();
+    for (const [path, operations] of Object.entries(canonical.paths) as Array<[string, Record<string, Record<string, unknown>>]>) {
+      const published = document.paths[path] as Record<string, Record<string, unknown>>;
+      for (const [method, operation] of Object.entries(operations)) {
+        const { security: _security, ...publishedOperation } = published[method] ?? {};
+        expect(publishedOperation).toEqual(operation);
+      }
     }
     expect(document.components.schemas).toEqual(canonical.components.schemas);
     expect(document.paths["/v1/resources/{opaqueRef}"].get.responses["200"].headers["X-Source-Sha256"].required).toBe(true);

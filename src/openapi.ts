@@ -53,6 +53,17 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
   const openapi = app.swagger?.() as OpenAPIV3.Document | undefined;
   if (!openapi) return;
   openapi.paths ??= {};
+  openapi.components ??= {};
+  openapi.components.securitySchemes = {
+    ...(openapi.components.securitySchemes ?? {}),
+    BankoneBearer: {
+      type: "http",
+      scheme: "bearer",
+      bearerFormat: "AutoData API key",
+      description: "Paste a Bankone key from the AutoData key dashboard (starts with adk_bankone_).",
+    },
+  };
+  openapi.security = [{ BankoneBearer: [] }];
   for (const route of PUBLIC_API_ROUTES) {
     const path = route.url.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
     const upstreamRoute = UPSTREAM_ROUTES[route.routeId];
@@ -65,9 +76,12 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
     openapi.paths[path].get = {
       operationId: route.routeId,
       summary: `Read upstream ${route.routeId}`,
+      security: [{ BankoneBearer: [] }],
       parameters,
       responses: {
         "200": { description: "Upstream response envelope" },
+        "401": { description: "Missing or invalid Bankone API key" },
+        "503": { description: "API key validation temporarily unavailable" },
         ...(route.routeId === "parts" ? { "404": { description: "No parts list is available for this vehicle" } } : {}),
         ...(route.routeId === "labor" ? { "404": { description: "No labor data is available for this vehicle or article" } } : {}),
         ...(["maintenanceFrequency", "maintenanceIntervals", "maintenanceIndicators"].includes(route.routeId)
@@ -80,8 +94,25 @@ export async function registerOpenApi(app: FastifyInstance): Promise<void> {
   }
   const contract = parse(readFileSync(new URL("./source-contract/openapi.yaml", import.meta.url), "utf8")) as OpenAPIV3.Document;
   Object.assign(openapi.paths, contract.paths);
-  openapi.components = { ...openapi.components, ...contract.components };
-  openapi.servers = contract.servers;
+  openapi.components = {
+    ...openapi.components,
+    ...contract.components,
+    securitySchemes: {
+      ...(contract.components?.securitySchemes ?? {}),
+      ...(openapi.components.securitySchemes ?? {}),
+    },
+  };
+  openapi.servers = [{ url: "https://bankone.cars.tk" }, ...(contract.servers ?? [{ url: "/" }])];
   openapi.openapi = contract.openapi;
   openapi.info.version = contract.info.version;
+  openapi.security = [{ BankoneBearer: [] }];
+  const publicPaths = new Set(["/healthz", "/readyz", "/openapi.json", "/docs", "/docs/{*}"]);
+  for (const [path, pathItem] of Object.entries(openapi.paths)) {
+    if (!pathItem || publicPaths.has(path) || path.startsWith("/docs")) continue;
+    for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+      const operation = pathItem[method];
+      if (!operation) continue;
+      operation.security = [{ BankoneBearer: [] }];
+    }
+  }
 }

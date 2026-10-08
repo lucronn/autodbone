@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 export type Config = {
   host: string;
   port: number;
+  apiKeysDatabaseUrl?: string;
   publicBaseUrl?: string;
   upstream: {
     entryUrl: string;
@@ -119,6 +120,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     host: env.HOST?.trim() || defaults.host,
     port: positiveInteger(env, "PORT", defaults.port),
+    apiKeysDatabaseUrl: env.API_KEYS_DATABASE_URL?.trim() || undefined,
     publicBaseUrl: optionalBaseUrl(env.PUBLIC_BASE_URL),
     upstream: {
       entryUrl,

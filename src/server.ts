@@ -2,13 +2,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import Fastify, { type FastifyInstance } from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import { bearerToken, createApiKeyVerifier, type ApiKeyVerifier } from "./api-keys.js";
 import { loadConfig, type Config } from "./config.js";
 import { EbscoHttpAuthAdapter } from "./auth/ebsco-http-auth-adapter.js";
 import { EncryptedSessionStore } from "./auth/session-store.js";
 import { SessionManager } from "./auth/session-manager.js";
 import { UpstreamApiClient } from "./upstream/upstream-client.js";
 import { AssetProxy } from "./assets/asset-proxy.js";
-import { serializeError } from "./errors.js";
+import { ConnectorError, serializeError } from "./errors.js";
 import { registerApiRoutes } from "./routes/api-routes.js";
 import { registerAssetRoutes } from "./routes/asset-routes.js";
 import { registerHealthRoutes } from "./routes/health-routes.js";
@@ -22,6 +23,7 @@ export type ConnectorDependencies = {
   upstreamClient?: UpstreamApiClient;
   sessionManager?: SessionManager;
   assetProxy?: AssetProxy;
+  apiKeyVerifier?: ApiKeyVerifier;
 };
 
 export async function createApp(deps: ConnectorDependencies): Promise<FastifyInstance> {
@@ -41,19 +43,47 @@ export async function createApp(deps: ConnectorDependencies): Promise<FastifyIns
     maxEntries: deps.config.limits.responseCacheMaxEntries,
     maxBytes: deps.config.limits.responseCacheMaxBytes,
   });
+  const testBypass = process.env.NODE_ENV === "test" && !deps.apiKeyVerifier && !deps.config.apiKeysDatabaseUrl;
+  const verifyApiKey = deps.apiKeyVerifier ?? createApiKeyVerifier(deps.config.apiKeysDatabaseUrl, testBypass);
 
   app.setErrorHandler((error, request, reply) => {
     const serialized = serializeError(error, request.id);
     reply.code((error as { statusCode?: number }).statusCode ?? (error as { status?: number }).status ?? 500).send(serialized);
   });
   await app.register(swagger, {
-      openapi: {
+    openapi: {
       openapi: "3.1.0",
-      info: { title: "Bankone Source API", version: "1.0.0" },
+      info: {
+        title: "Bankone Source API",
+        version: "1.0.0",
+        description: "Read-only Bankone connector for AutoData. Canonical origin: https://bankone.cars.tk. Create a Bankone-scoped key in the AutoData key dashboard, then use Authorize in Swagger.",
+      },
+      servers: [{ url: "https://bankone.cars.tk" }, { url: "/" }],
+      components: {
+        securitySchemes: {
+          BankoneBearer: {
+            type: "http",
+            scheme: "bearer",
+            bearerFormat: "AutoData API key",
+            description: "Paste a Bankone key from the AutoData key dashboard (starts with adk_bankone_).",
+          },
+        },
+      },
+      security: [{ BankoneBearer: [] }],
     },
   });
-  await app.register(swaggerUi, { routePrefix: "/docs" });
+  await app.register(swaggerUi, {
+    routePrefix: "/docs",
+    uiConfig: { persistAuthorization: true },
+  });
   app.get("/openapi.json", async () => app.swagger());
+  app.addHook("preHandler", async (request) => {
+    if (!request.url.split("?", 1)[0].startsWith("/v1/")) return;
+    const token = bearerToken(request.headers.authorization);
+    if ((!token && !testBypass) || (token && !(await verifyApiKey(token, "bankone")))) {
+      throw new ConnectorError("unauthenticated", "A valid Bankone API key is required", 401);
+    }
+  });
   registerApiRoutes(app, { config: deps.config, upstreamClient, sessionManager, clientRateLimiter, responseCache });
   registerSourceContractRoutes(app, { config: deps.config, upstreamClient, sessionManager, clientRateLimiter, responseCache });
   registerAssetRoutes(app, { config: deps.config, assetProxy, sessionManager });
